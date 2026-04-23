@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>XR Hatsune Miku (Kasual) | XR Blocks</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <link
+      type="text/css"
+      rel="stylesheet"
+      href="https://xrblocks.github.io/css/xr.css"
+    />
+    <script>
+      window.litDisableBundleWarning = true;
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
+          "troika-three-text": "https://cdn.jsdelivr.net/gh/protectwise/troika@028b81cf308f0f22e5aa8e78196be56ec1997af5/packages/troika-three-text/src/index.js",
+          "troika-three-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-three-utils/src/index.js",
+          "troika-worker-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-worker-utils/src/index.js",
+          "bidi-js": "https://esm.sh/bidi-js@%5E1.0.2?target=es2022",
+          "webgl-sdf-generator": "https://esm.sh/webgl-sdf-generator@1.1.1/es2022/webgl-sdf-generator.mjs",
+          "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
+          "lit/": "https://esm.run/lit@3/",
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/addons/"
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <!-- Overlay UI HTML Asli untuk unggah file lokal secara aman dari batasan CORS -->
+    <div
+      id="uploadContainer"
+      style="
+        position: fixed;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1000;
+        background: rgba(17, 17, 17, 0.85);
+        padding: 15px 25px;
+        border-radius: 12px;
+        text-align: center;
+        color: white;
+        font-family: sans-serif;
+        border: 2px solid #39c5bb;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+      "
+    >
+      <p
+        style="
+          margin: 0 0 10px 0;
+          font-size: 15px;
+          font-weight: bold;
+          color: #39c5bb;
+        "
+      >
+        ✨ Muat Model Miku ✨
+      </p>
+      <p style="margin: 0 0 10px 0; font-size: 12px; color: #ccc">
+        Pilih file
+        <strong style="color: white">hopping_frills_miku.glb</strong> dari
+        komputer Anda
+      </p>
+      <input
+        type="file"
+        id="glbFileInput"
+        accept=".glb,.gltf"
+        style="color: white; font-size: 14px"
+      />
+    </div>
+
+    <script type="module">
+      import "xrblocks/addons/simulator/SimulatorAddons.js";
+      import * as THREE from "three";
+      import * as xb from "xrblocks";
+
+      /**
+       * MikuXRScene mengelola penampil model, UI bertema, dan animasi ambien.
+       */
+      export class MikuXRScene extends xb.Script {
+        constructor() {
+          super();
+          this.notes = [];
+          this.time = 0;
+          this.modelViewer = null; // Menyimpan referensi ke model agar bisa diganti
+        }
+
+        async init() {
+          this.setupLighting();
+          this.createSpatialUI();
+          this.createFloatingNotes();
+
+          // Mempersiapkan tombol unggah file di antarmuka web
+          this.setupFilePicker();
+
+          // Meminta pengguna langsung mengunggah tanpa memuat placeholder apa pun
+          // untuk menghindari bug caching path pada GLTFLoader.
+          this.statusText.setText("↓ Silakan pilih file Miku .glb di bawah ↓");
+        }
+
+        setupLighting() {
+          // Warna khas Miku: Teal (#39C5BB) dan Magenta/Pink (#E12885)
+          const hemiLight = new THREE.HemisphereLight(0x39c5bb, 0xe12885, 2.5);
+          this.add(hemiLight);
+
+          const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+          dirLight.position.set(2, 4, 2);
+          dirLight.castShadow = true;
+          this.add(dirLight);
+        }
+
+        createSpatialUI() {
+          // Panel Spasial bertema untuk instruksi pengguna
+          this.panel = new xb.SpatialPanel({
+            width: 1.5,
+            height: 0.8,
+            backgroundColor: "#111111dd",
+            showEdge: true,
+          });
+
+          // Posisikan panel mengambang di atas dan di belakang area panggung
+          this.panel.position.set(0, 1.8, -2.5);
+          this.add(this.panel);
+
+          const grid = this.panel.addGrid();
+
+          grid.addRow({ weight: 0.4 }).addText({
+            text: "Hatsune Miku (Pakaian Kasual)",
+            fontSize: 0.08,
+            fontColor: "#39C5BB", // Teal khas Miku
+          });
+
+          this.statusText = grid.addRow({ weight: 0.3 }).addText({
+            text: "Memuat simulator...",
+            fontSize: 0.05,
+            fontColor: "#ffffff",
+          });
+
+          grid.addRow({ weight: 0.3 }).addText({
+            text: "Cubit/Klik model untuk memutar. Seret platform untuk memindahkan.",
+            fontSize: 0.04,
+            fontColor: "#aaaaaa",
+          });
+        }
+
+        createFloatingNotes() {
+          // Membuat nada musik yang akan melayang di sekitar karakter
+          const noteSymbols = ["♪", "♫", "♬", "♩"];
+
+          for (let i = 0; i < 8; i++) {
+            const symbol =
+              noteSymbols[Math.floor(Math.random() * noteSymbols.length)];
+            const note = new xb.TextView({
+              text: symbol,
+              fontColor: i % 2 === 0 ? "#39C5BB" : "#E12885",
+              fontSize: 0.1 + Math.random() * 0.1,
+            });
+
+            // Mengacak posisi awal di sekitar platform
+            this.resetNotePosition(note);
+            note.position.y = Math.random() * 2.0; // Tersebar secara vertikal pada awalnya
+
+            this.add(note);
+            this.notes.push({
+              mesh: note,
+              speed: 0.2 + Math.random() * 0.3,
+              wobbleSpeed: 1.0 + Math.random() * 2.0,
+              wobbleOffset: Math.random() * Math.PI * 2,
+            });
+          }
+        }
+
+        resetNotePosition(note) {
+          const radius = 0.8 + Math.random() * 0.5;
+          const angle = Math.random() * Math.PI * 2;
+          note.position.set(
+            Math.cos(angle) * radius,
+            -0.5, // Mulai dari bawah platform
+            -1.5 + Math.sin(angle) * radius,
+          );
+        }
+
+        setupFilePicker() {
+          const fileInput = document.getElementById("glbFileInput");
+          fileInput.addEventListener("change", async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // Mengubah file lokal menjadi Blob URL yang dapat dibaca oleh loader 3D.
+            const fileUrl = URL.createObjectURL(file);
+
+            this.statusText.setText("Memuat Miku ke panggung...");
+            this.statusText.fontColor = "#39C5BB";
+
+            try {
+              // Menghapus model lama jika pengguna mengunggah model lain
+              if (this.modelViewer) {
+                this.remove(this.modelViewer);
+              }
+
+              // Membuat penampil model yang baru untuk Miku
+              this.modelViewer = new xb.ModelViewer({});
+              this.add(this.modelViewer);
+
+              await this.modelViewer.loadGLTFModel({
+                data: {
+                  scale: { x: 0.15, y: 0.15, z: 0.15 },
+                  // Jangan sertakan 'path' di sini agar GLTFLoader tidak mengalami bug penggabungan URL
+                  model: fileUrl,
+                },
+                renderer: xb.core.renderer,
+              });
+
+              this.modelViewer.position.set(0, 0.5, -1.5);
+              this.statusText.setText("Siap! Nikmati konsernya!");
+              this.statusText.fontColor = "#ffffff";
+
+              // Membebaskan memori browser setelah file selesai dimuat
+              URL.revokeObjectURL(fileUrl);
+
+              // Menyembunyikan panel unggah setelah model berhasil dimuat agar tidak mengganggu pandangan
+              const uploadContainer =
+                document.getElementById("uploadContainer");
+              if (uploadContainer) {
+                uploadContainer.style.display = "none";
+              }
+            } catch (error) {
+              console.error("Kesalahan saat memuat model lokal:", error);
+              this.statusText.setText("Gagal memuat file GLB.");
+              this.statusText.fontColor = "#ff4444";
+            }
+          });
+        }
+
+        update() {
+          const deltaTime = xb.getDeltaTime();
+          this.time += deltaTime;
+
+          // Menganimasikan nada musik yang melayang
+          this.notes.forEach((noteData) => {
+            const note = noteData.mesh;
+
+            // Melayang ke atas
+            note.position.y += noteData.speed * deltaTime;
+
+            // Goyangan lembut ke kiri dan kanan
+            note.position.x +=
+              Math.sin(
+                this.time * noteData.wobbleSpeed + noteData.wobbleOffset,
+              ) * 0.002;
+
+            // Berputar perlahan
+            note.rotation.y += deltaTime;
+
+            // Atur ulang ketika melayang terlalu tinggi
+            if (note.position.y > 2.5) {
+              this.resetNotePosition(note);
+            }
+          });
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", async () => {
+        const options = new xb.Options();
+        options.enableUI();
+        options.setAppTitle("XR Hatsune Miku");
+
+        // Menambahkan adegan kita ke XR Blocks
+        xb.add(new MikuXRScene());
+
+        // Menginisialisasi mesin
+        await xb.init(options);
+      });
+    </script>
+  </body>
+</html>
